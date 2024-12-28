@@ -1,0 +1,565 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: >-
+  This template will automate the creation of ec2 instances with web servers
+  and application load balancer with certificate and WAF.
+
+Parameters:
+  VpcCidr:
+    Type: String
+    Description: CIDR for the VPC
+    Default: 20.0.0.0/16
+
+  PublicSubnetCidrBlocks:
+    Type: List<String>
+    Description: List of CIDR blocks for the public subnets
+    Default: "20.0.1.0/24, 20.0.2.0/24"
+
+  PrivateSubnetCidrBlocks:
+    Type: List<String>
+    Description: List of CIDR blocks for the private subnets
+    Default: "20.0.3.0/24, 20.0.4.0/24, 20.0.5.0/24"
+
+  AvailabilityZones:
+    Type: List<String>
+    Description: A list of availability zones relevent in the eu-north region
+    Default: "eu-north-1a, eu-north-1b, eu-north-1c"
+
+  InstancesNames:
+    Type: List<String>
+    Description: A list of instances name's
+    Default: "web-server-1, web-server-2"
+
+  HostedZoneId:
+    Type: String
+    Description: Hosted Zone ID for DNS records
+    Default: "Z00737313AZAETNBPIDSR"
+
+  DomainName:
+    Type: String
+    Description: The name of my domain
+    Default: "yuval-raveh.net"
+
+Resources:
+  # IAM role for web servers
+  ApplicationIAMRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: EC2SSMCloudWatchRole
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: SSMParameterStoreAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ssm:GetParameter
+                  - ssm:GetParameters
+                  - ssm:GetParametersByPath
+                  - ssm:DescribeParameters
+                  - kms:Decrypt
+                Resource:
+                  - !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/instances/*
+        - PolicyName: SSMCoreAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ssm:DescribeInstanceInformation
+                  - ssm:SendCommand
+                  - ssm:ListCommands
+                  - ssm:ListCommandInvocations
+                  - ssm:UpdateInstanceInformation
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - ec2messages:*
+                  - ssmmessages:*
+                Resource: "*"
+        - PolicyName: CloudWatchLogAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: "*"
+
+  # application servers instance profile
+  ApplicationInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref ApplicationIAMRole
+
+  # application vpc
+  ApplicationVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VpcCidr
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: Application-VPC
+
+  # application public subnets
+  ApplicationPublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref ApplicationVPC
+      CidrBlock: !Select [0, !Ref PublicSubnetCidrBlocks]
+      AvailabilityZone: !Select [0, !Ref AvailabilityZones]
+      Tags:
+        - Key: Name
+          Value: Application-Public-Subnet-1
+
+  ApplicationPublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref ApplicationVPC
+      CidrBlock: !Select [1, !Ref PublicSubnetCidrBlocks]
+      AvailabilityZone: !Select [1, !Ref AvailabilityZones]
+      Tags:
+        - Key: Name
+          Value: Application-Public-Subnet-2
+
+  # Application private subnets
+  ApplicationPrivateSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref ApplicationVPC
+      CidrBlock: !Select [0, !Ref PrivateSubnetCidrBlocks]
+      AvailabilityZone: !Select [0, !Ref AvailabilityZones]
+      Tags:
+        - Key: Name
+          Value: Application-Private-Subnet-1
+
+  ApplicationPrivateSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref ApplicationVPC
+      CidrBlock: !Select [1, !Ref PrivateSubnetCidrBlocks]
+      AvailabilityZone: !Select [1, !Ref AvailabilityZones]
+      Tags:
+        - Key: Name
+          Value: Application-Private-Subnet-2
+
+  ApplicationPrivateSubnet3:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref ApplicationVPC
+      CidrBlock: !Select [2, !Ref PrivateSubnetCidrBlocks]
+      AvailabilityZone: !Select [2, !Ref AvailabilityZones]
+      Tags:
+        - Key: Name
+          Value: Application-Private-Subnet-3
+
+  # Application Route Tables - Public and Private
+  ApplicationPublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref ApplicationVPC
+      Tags:
+        - Key: Name
+          Value: PublicRouteTable
+
+  ApplicationPrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref ApplicationVPC
+      Tags:
+        - Key: Name
+          Value: PrivateRouteTable
+
+  # Application Route Tables associations
+  ApplicationPublicRouteTableAssociation1:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref ApplicationPublicRouteTable
+      SubnetId: !Ref ApplicationPublicSubnet1
+
+  ApplicationPublicRouteTableAssociation2:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref ApplicationPublicRouteTable
+      SubnetId: !Ref ApplicationPublicSubnet2
+
+  ApplicationPrivateRouteTableAssociation1:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref ApplicationPrivateRouteTable
+      SubnetId: !Ref ApplicationPrivateSubnet1
+
+  ApplicationPrivateRouteTableAssociation2:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref ApplicationPrivateRouteTable
+      SubnetId: !Ref ApplicationPrivateSubnet2
+
+  ApplicationPrivateRouteTableAssociation3:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref ApplicationPrivateRouteTable
+      SubnetId: !Ref ApplicationPrivateSubnet3
+
+  # Application VPC internet gateway
+  ApplicationInternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: Application-IG
+
+  ApplicationInternetGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      InternetGatewayId: !Ref ApplicationInternetGateway
+      VpcId: !Ref ApplicationVPC
+
+  # Application VPC Route Table route to internet gateway
+  ApplicationPublicRouteTableInternetRoute:
+    Type: AWS::EC2::Route
+    DependsOn:
+      - ApplicationInternetGateway
+      - ApplicationInternetGatewayAttachment
+    Properties:
+      RouteTableId: !Ref ApplicationPublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref ApplicationInternetGateway
+
+  # Application VPC elastic vpc
+  ApplicationElasticIP:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+
+  # Application Nat Gateway
+  ApplicationNatGateway:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt ApplicationElasticIP.AllocationId
+      SubnetId: !Ref ApplicationPublicSubnet1
+      Tags:
+        - Key: Name
+          Value: Application-NatGateway
+
+  # Application Route Table route for nat gateway
+  ApplicationPrivateRouteTableRouteNat:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref ApplicationPrivateRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref ApplicationNatGateway
+
+  # Application systems manager parameter stores variables
+  ApplicationSSMFirstInstance:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /instances/instance-one-name
+      Type: String
+      Value: !Select [0, !Ref InstancesNames]
+      Description: name of the first instance
+
+  ApplicationSSMSecondInstance:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /instances/instance-two-name
+      Type: String
+      Value: !Select [1, !Ref InstancesNames]
+      Description: name of the second instance
+
+  # Application vpc interface endpoint to communicate with systems manager
+  # interface endpoint's security group
+  ApplicationInterfaceEndpointSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security Group for VPC endpoints
+      VpcId: !Ref ApplicationVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 20.0.0.0/16
+      Tags:
+        - Key: Name
+          Value: SSM-Endpoint-SG
+
+  # ssm interface endpoint
+  ApplicationSSMInterfaceEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref ApplicationVPC
+      ServiceName: !Sub com.amazonaws.${AWS::Region}.ssm
+      VpcEndpointType: Interface
+      SubnetIds:
+        - !Ref ApplicationPrivateSubnet1
+        - !Ref ApplicationPrivateSubnet2
+        - !Ref ApplicationPrivateSubnet3
+      SecurityGroupIds:
+        - !Ref ApplicationInterfaceEndpointSecurityGroup
+      PrivateDnsEnabled: true
+      Tags:
+        - Key: Name
+          Value: Application-SSM-interface-endpoint
+
+    # ec2 messages interface endpoint
+
+
+  # ec2 messages interface endpoint
+  ApplicationEC2MessagesInterfaceEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref ApplicationVPC
+      ServiceName: !Sub com.amazonaws.${AWS::Region}.ec2messages
+      VpcEndpointType: Interface
+      SubnetIds:
+        - !Ref ApplicationPrivateSubnet1
+        - !Ref ApplicationPrivateSubnet2
+        - !Ref ApplicationPrivateSubnet3
+      SecurityGroupIds:
+        - !Ref ApplicationInterfaceEndpointSecurityGroup
+      PrivateDnsEnabled: true
+      Tags:
+        - Key: Name
+          Value: Application-EC2-Messages-interface-endpoint
+
+  # ssm messages interface endpoint
+  ApplicationSSMMessagesInterfaceEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref ApplicationVPC
+      ServiceName: !Sub com.amazonaws.${AWS::Region}.ssmmessages
+      VpcEndpointType: Interface
+      SubnetIds:
+        - !Ref ApplicationPrivateSubnet1
+        - !Ref ApplicationPrivateSubnet2
+        - !Ref ApplicationPrivateSubnet3
+      SecurityGroupIds:
+        - !Ref ApplicationInterfaceEndpointSecurityGroup
+      PrivateDnsEnabled: true
+      Tags:
+        - Key: Name
+          Value: Application-SSM-Messages-interface-endpoint
+
+  # Application Web servers security group -- needs to be changed
+  ApplicationWebServerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Enable HTTP access
+      VpcId: !Ref ApplicationVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          SourceSecurityGroupId: !Ref ApplicationLoadBalancerSecurityGroup
+
+  # Application web servers
+  ApplicationWebServerOne:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: t3.micro
+      ImageId: ami-02df5cb5ad97983ba
+      IamInstanceProfile: !Ref ApplicationInstanceProfile
+      NetworkInterfaces:
+        - AssociatePublicIpAddress: false
+          DeviceIndex: 0
+          SubnetId: !Ref ApplicationPrivateSubnet1
+          GroupSet:
+            - !Ref ApplicationWebServerSecurityGroup
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          yum update -y
+          yum install -y httpd
+          echo '<html><body>' > /var/www/html/index.html
+          echo '<h1>Instance Parameter Value:</h1>' >> /var/www/html/index.html
+          echo '<p>' >> /var/www/html/index.html
+          aws ssm get-parameter --name "/instances/instance-one-name" --with-decryption --query "Parameter.Value" --output text >> /var/www/html/index.html
+          echo '</p>' >> /var/www/html/index.html
+          echo '</body></html>' >> /var/www/html/index.html
+          systemctl start httpd
+          systemctl enable httpd
+      Tags:
+        - Key: Name
+          Value: Application-Web-Server-One
+
+  ApplicationWebServerTwo:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: t3.micro
+      ImageId: ami-02df5cb5ad97983ba
+      IamInstanceProfile: !Ref ApplicationInstanceProfile
+      NetworkInterfaces:
+        - AssociatePublicIpAddress: false
+          DeviceIndex: 0
+          SubnetId: !Ref ApplicationPrivateSubnet2
+          GroupSet:
+            - !Ref ApplicationWebServerSecurityGroup
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          yum update -y
+          yum install -y httpd
+          echo '<html><body>' > /var/www/html/index.html
+          echo '<h1>Instance Parameter Value:</h1>' >> /var/www/html/index.html
+          echo '<p>' >> /var/www/html/index.html
+          aws ssm get-parameter --name "/instances/instance-two-name" --with-decryption --query "Parameter.Value" --output text >> /var/www/html/index.html
+          echo '</p>' >> /var/www/html/index.html
+          echo '</body></html>' >> /var/www/html/index.html
+          systemctl start httpd
+          systemctl enable httpd
+      Tags:
+        - Key: Name
+          Value: Application-Web-Server-Two
+
+  # load balancer target group
+  ApplicationLoadBalancerTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      VpcId: !Ref ApplicationVPC
+      HealthCheckEnabled: true
+      Name: Application-TG
+      TargetType: instance
+      Port: 80
+      Protocol: HTTP
+      Targets:
+        - Id: !Ref ApplicationWebServerOne
+          Port: 80
+        - Id: !Ref ApplicationWebServerTwo
+          Port: 80
+
+  # the following things to be done: load balancer with security group
+  ApplicationLoadBalancerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow http and https to the load balancer
+      VpcId: !Ref ApplicationVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          Fromport: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+
+  # Application load balancer for web servers
+  ApplicationLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: Application-Load-Balancer
+      SecurityGroups:
+        - !Ref ApplicationLoadBalancerSecurityGroup
+      Subnets:
+        - !Ref ApplicationPublicSubnet1
+        - !Ref ApplicationPublicSubnet2
+      Scheme: internet-facing
+      IpAddressType: ipv4
+      Tags:
+        - Key: Name
+          Value: Application-Load-Balancer
+
+  # Application load balancer listener
+  ApplicationLoadBalancerListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref ApplicationLoadBalancer
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - Type: redirect
+          RedirectConfig:
+            Protocol: HTTPS
+            Port: 443
+            Host: !Ref DomainName
+            StatusCode: 'HTTP_301'
+
+  # Application load balancer dns record
+  ApplicationLoadBalancerRecord:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Name: yuval-raveh.net
+      Type: A
+      AliasTarget:
+        DNSName: !GetAtt ApplicationLoadBalancer.DNSName
+        HostedZoneId: !GetAtt ApplicationLoadBalancer.CanonicalHostedZoneID
+
+  # Application load balancer certificate
+  ApplicationLoadBalancerCertificate:
+    Type: AWS::CertificateManager::Certificate
+    Properties:
+      DomainName: yuval-raveh.net
+      ValidationMethod: DNS
+      DomainValidationOptions:
+        - DomainName: yuval-raveh.net
+          HostedZoneId: !Ref HostedZoneId
+
+
+  # Application load balancer HTTPS listener
+  ApplicationLoadBalancerHTTPSListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref ApplicationLoadBalancer
+      Protocol: HTTPS
+      Port: 443
+      Certificates:
+        - CertificateArn: !Ref ApplicationLoadBalancerCertificate
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref ApplicationLoadBalancerTargetGroup
+
+
+  # Application Web ACL to only allow traffic that contains the following header - yuval: raveh
+  ApplicationWebACL:
+    Type: AWS::WAFv2::WebACL
+    Properties:
+      Name: ApplicationWebACL
+      Scope: REGIONAL
+      DefaultAction:
+        Block: {}
+      Rules:
+        - Name: RequireYuvalRavehHeader
+          Priority: 1
+          Statement:
+            ByteMatchStatement:
+              SearchString: "raveh"
+              FieldToMatch:
+                SingleHeader:
+                  Name: "yuval"
+              PositionalConstraint: EXACTLY
+              TextTransformations:
+                - Type: NONE
+                  Priority: 0
+          Action:
+            Allow: {}
+          VisibilityConfig:
+            SampleRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: ApplicationWebACLMetric
+
+      VisibilityConfig:
+        SampledRequestsEnabled: true
+        CloudWatchMetricsEnabled: true
+        MetricName: MyWebACL
+
+  # Application WAFL association to ALB
+  ApplicationWafWebAssociation:
+    Type: AWS::WAFv2::WebACLAssociation
+    Properties:
+      ResourceArn: !Ref ApplicationLoadBalancer
+      WebACLArn: !GetAtt ApplicationWebACL.Arn
+
+  ## integrate the load balancer with WAF
+  ## add ACL to WAF which only allows traffic to reach the load balancer with a specified header
