@@ -1,0 +1,19 @@
+aws eks update-kubeconfig \
+--region eu-north-1 \
+--name staging-demo
+
+kubectl get nodes
+kubectl auth can-i "*" "*"
+
+aws configure --profile <profile_name>
+aws sts get-caller-identity --profile <profile_name>
+
+kubectl config view --minify
+
+aws sts assume-role \
+--role-arn arn:aws:iam::916913028637:role/staging-demo-eks-admin \
+--role-session-name manager-session \
+--profile manager
+
+
+***~/.aws/config - file for local profiles ***
